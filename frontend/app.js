@@ -362,7 +362,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         // Translate
-        translateBtn.addEventListener("click", () => {
+        translateBtn.addEventListener("click", async () => {
             const text = sourceText.value.trim();
             if (!text) { showToast("⚠ Please enter text to translate"); return; }
             const src = sourceLang.value;
@@ -370,10 +370,24 @@ document.addEventListener("DOMContentLoaded", () => {
             if (src === tgt) { showToast("⚠ Source and target languages must differ"); return; }
 
             translateBtn.classList.add("loading");
+            outputText.innerHTML = '<span class="output-placeholder">Translating…</span>';
 
-            // Simulate IndicTrans2 translation
-            setTimeout(() => {
-                const result = performTranslation(text, src, tgt);
+            try {
+                const API_BASE = "http://localhost:8000";
+                const response = await fetch(`${API_BASE}/translate`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text, src_lang: src, tgt_lang: tgt }),
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || `Server error ${response.status}`);
+                }
+
+                const data = await response.json();
+                const result = data.translations.join("\n");
+
                 outputText.innerHTML = "";
                 outputText.textContent = result;
 
@@ -394,9 +408,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 localStorage.setItem("agri-recent", JSON.stringify(recentTranslations));
                 renderRecentTranslations();
 
-                translateBtn.classList.remove("loading");
                 showToast("✓ Translation complete via IndicTrans2");
-            }, 800 + Math.random() * 700);
+            } catch (err) {
+                outputText.innerHTML = "";
+                outputText.textContent = `❌ Translation failed: ${err.message}`;
+                showToast("❌ Translation failed — is the backend running?");
+            } finally {
+                translateBtn.classList.remove("loading");
+            }
         });
 
         renderRecentTranslations();
@@ -419,75 +438,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 100);
     }
 
-    function performTranslation(text, sourceLangCode, targetLangCode) {
-        const words = text.split(/\s+/);
-        let matchedTerms = [];
 
-        for (const item of AGRICULTURE_DICTIONARY) {
-            const sourceTranslation = item.translations[sourceLangCode];
-            if (sourceTranslation && text.toLowerCase().includes(sourceTranslation.toLowerCase())) {
-                matchedTerms.push({
-                    source: sourceTranslation,
-                    target: item.translations[targetLangCode] || item.translations["en"],
-                    term: item.term
-                });
-            }
-        }
-
-        if (matchedTerms.length > 0) {
-            let result = text;
-            for (const match of matchedTerms) {
-                const regex = new RegExp(escapeRegExp(match.source), "gi");
-                result = result.replace(regex, match.target);
-            }
-            return result + `\n\n🤖 IndicTrans2 | Matched: ${matchedTerms.map(m => m.term).join(", ")}`;
-        }
-
-        // Exact match
-        for (const item of AGRICULTURE_DICTIONARY) {
-            const srcTrans = item.translations[sourceLangCode];
-            if (srcTrans && srcTrans.toLowerCase() === text.toLowerCase().trim()) {
-                const tgtTrans = item.translations[targetLangCode];
-                if (tgtTrans) return `${tgtTrans}\n\n📖 ${item.definition}\n🤖 Translated by IndicTrans2`;
-            }
-        }
-
-        // Word-by-word
-        let wordTranslations = [];
-        for (const word of words) {
-            let found = false;
-            for (const item of AGRICULTURE_DICTIONARY) {
-                const srcTrans = item.translations[sourceLangCode];
-                if (srcTrans && srcTrans.toLowerCase() === word.toLowerCase()) {
-                    wordTranslations.push(item.translations[targetLangCode] || word);
-                    found = true; break;
-                }
-            }
-            if (!found) wordTranslations.push(word);
-        }
-
-        if (wordTranslations.join(" ") !== text) {
-            return wordTranslations.join(" ") + "\n\n🤖 Translated by IndicTrans2";
-        }
-
-        const suggestions = AGRICULTURE_DICTIONARY
-            .filter(item => {
-                const st = item.translations[sourceLangCode]?.toLowerCase() || "";
-                return text.toLowerCase().split(/\s+/).some(w => st.includes(w.toLowerCase()) && w.length > 2);
-            }).slice(0, 3);
-
-        if (suggestions.length > 0) {
-            return `⚡ No exact match. Did you mean:\n\n${suggestions.map(s =>
-                `• ${s.translations[sourceLangCode]} → ${s.translations[targetLangCode]}\n  (${s.term})`
-            ).join("\n\n")}\n\n🤖 IndicTrans2 Suggestions`;
-        }
-
-        return `🔍 Term not found in agriculture dictionary.\n\nTry:\n${AGRICULTURE_DICTIONARY.slice(0, 5).map(t =>
-            `• ${t.translations[sourceLangCode] || t.term}`
-        ).join("\n")}\n\n💡 Use the Dictionary page to explore available terms.\n🤖 IndicTrans2`;
-    }
-
-    function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
     // ---- DICTIONARY ----
     function renderDictionary() {
