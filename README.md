@@ -1,3 +1,5 @@
+# Agricultural translator 
+
 **Install PyTorch with CUDA support** (Windows):
    ```
    uv pip uninstall torch
