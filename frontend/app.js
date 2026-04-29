@@ -10,6 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentPageNum = 1;
     const itemsPerPage = 6;
     let recentTranslations = JSON.parse(localStorage.getItem("agri-recent") || "[]");
+    const API_BASE = "http://localhost:8000";
 
     // ---- INDICTRANS2 LANGUAGES ----
     const INDIC_LANGUAGES = [
@@ -38,10 +39,40 @@ document.addEventListener("DOMContentLoaded", () => {
         { code: "bo", name: "Bodo", script: "बड़ो", flag: "🇮🇳" },
     ];
 
+    const UI_LANGUAGES = [
+        { code: "eng_Latn", label: "English" },
+        { code: "hin_Deva", label: "Hindi" },
+        { code: "ben_Beng", label: "Bengali" },
+        { code: "tam_Taml", label: "Tamil" },
+        { code: "tel_Telu", label: "Telugu" },
+        { code: "mar_Deva", label: "Marathi" },
+        { code: "guj_Gujr", label: "Gujarati" },
+        { code: "kan_Knda", label: "Kannada" },
+        { code: "mal_Mlym", label: "Malayalam" },
+        { code: "pan_Guru", label: "Punjabi" },
+        { code: "ory_Orya", label: "Odia" },
+        { code: "asm_Beng", label: "Assamese" },
+        { code: "brx_Deva", label: "Bodo" },
+        { code: "doi_Deva", label: "Dogri" },
+        { code: "kas_Arab", label: "Kashmiri (Arabic)" },
+        { code: "kas_Deva", label: "Kashmiri (Devanagari)" },
+        { code: "gom_Deva", label: "Konkani" },
+        { code: "mai_Deva", label: "Maithili" },
+        { code: "mni_Beng", label: "Manipuri (Bengali)" },
+        { code: "mni_Mtei", label: "Manipuri (Meitei)" },
+        { code: "npi_Deva", label: "Nepali" },
+        { code: "san_Deva", label: "Sanskrit" },
+        { code: "sat_Olck", label: "Santali" },
+        { code: "snd_Arab", label: "Sindhi (Arabic)" },
+        { code: "snd_Deva", label: "Sindhi (Devanagari)" },
+        { code: "urd_Arab", label: "Urdu" },
+    ];
+
     // ---- DOM ELEMENTS ----
     const navbar = document.getElementById("navbar");
     const navToggle = document.getElementById("nav-toggle");
     const navLinks = document.getElementById("nav-links");
+    const uiLangSelect = document.getElementById("ui-language");
     const toast = document.getElementById("toast");
     const pageTransition = document.getElementById("page-transition");
     const cursorGlow = document.getElementById("cursor-glow");
@@ -143,6 +174,232 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     typewrite();
 
+    // ---- UI TRANSLATION ----
+    const UI_LANGUAGE_STORAGE_KEY = "agri-ui-lang";
+    const TRANSLATE_IGNORE_SELECTORS = [
+        "script",
+        "style",
+        "noscript",
+        "select",
+        "option",
+        ".no-translate",
+        "#source-text",
+        ".recent-source",
+        ".recent-target",
+        ".recent-meta",
+        ".stat-number",
+        ".floating-element",
+        ".orbit-badge",
+        ".logo-icon",
+        ".step-icon",
+        ".about-icon",
+        ".tech-icon",
+        ".empty-icon",
+        ".it2-icon",
+        ".category-emoji"
+    ].join(",");
+
+    let currentUiLang = "eng_Latn";
+    const uiTranslationCache = new Map();
+    const originalTextNodes = new WeakMap();
+    const trackedTextNodes = new Set();
+    const trackedAttrElements = new Set();
+
+    function splitWhitespace(text) {
+        const match = text.match(/^(\s*)([\s\S]*?)(\s*)$/);
+        return { lead: match[1], core: match[2], trail: match[3] };
+    }
+
+    function isIgnoredNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return true;
+        if (parent.closest("#output-text") && !parent.classList.contains("output-placeholder")) return true;
+        if (parent.closest(".recent-item")) return true;
+        return Boolean(parent.closest(TRANSLATE_IGNORE_SELECTORS));
+    }
+
+    function collectTextNodes(root) {
+        const nodes = [];
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode(node) {
+                    if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+                    if (isIgnoredNode(node)) return NodeFilter.FILTER_REJECT;
+                    return NodeFilter.FILTER_ACCEPT;
+                },
+            },
+        );
+
+        let current;
+        while ((current = walker.nextNode())) {
+            nodes.push(current);
+        }
+        return nodes;
+    }
+
+    function collectAttributeTargets(root) {
+        const attrs = ["placeholder", "title", "aria-label"];
+        const elements = root.querySelectorAll("[placeholder], [title], [aria-label]");
+        const targets = [];
+        elements.forEach(el => {
+            if (el.closest(TRANSLATE_IGNORE_SELECTORS)) return;
+            attrs.forEach(attr => {
+                if (el.hasAttribute(attr)) targets.push({ el, attr });
+            });
+        });
+        return targets;
+    }
+
+    function getOriginalText(node) {
+        if (!originalTextNodes.has(node)) {
+            originalTextNodes.set(node, node.textContent);
+            trackedTextNodes.add(node);
+        }
+        return originalTextNodes.get(node);
+    }
+
+    function getOriginalAttr(el, attr) {
+        const key = `i18n${attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase()).replace(/^(.)/, c => c.toUpperCase())}`;
+        if (!el.dataset[key]) {
+            el.dataset[key] = el.getAttribute(attr) || "";
+            trackedAttrElements.add(el);
+        }
+        return el.dataset[key];
+    }
+
+    function restoreUiText() {
+        trackedTextNodes.forEach(node => {
+            const original = originalTextNodes.get(node);
+            if (original !== undefined) node.textContent = original;
+        });
+
+        trackedAttrElements.forEach(el => {
+            if (el.dataset.i18nPlaceholder !== undefined) {
+                el.setAttribute("placeholder", el.dataset.i18nPlaceholder);
+            }
+            if (el.dataset.i18nTitle !== undefined) {
+                el.setAttribute("title", el.dataset.i18nTitle);
+            }
+            if (el.dataset.i18nAriaLabel !== undefined) {
+                el.setAttribute("aria-label", el.dataset.i18nAriaLabel);
+            }
+        });
+    }
+
+    function applyTranslation(task, translated) {
+        if (!translated) return;
+        if (task.type === "text") {
+            task.node.textContent = `${task.lead}${translated}${task.trail}`;
+        } else {
+            task.el.setAttribute(task.attr, `${task.lead}${translated}${task.trail}`);
+        }
+    }
+
+    async function translatePage(targetLang, options = {}) {
+        const { force = false } = options;
+        if (!targetLang) return;
+
+        if (targetLang === "eng_Latn") {
+            currentUiLang = targetLang;
+            localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, targetLang);
+            restoreUiText();
+            return;
+        }
+
+        if (targetLang === currentUiLang && !force) return;
+
+        currentUiLang = targetLang;
+        localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, targetLang);
+
+        const activePage = document.querySelector(".page.active");
+        const translationRoots = [activePage, document.getElementById("navbar")].filter(Boolean);
+        if (!translationRoots.length) return;
+
+        const tasks = [];
+
+        translationRoots.forEach(root => {
+            collectTextNodes(root).forEach(node => {
+                const original = getOriginalText(node);
+                const { lead, core, trail } = splitWhitespace(original);
+                if (!core) return;
+                tasks.push({ type: "text", node, lead, trail, text: core });
+            });
+
+            collectAttributeTargets(root).forEach(({ el, attr }) => {
+                const original = getOriginalAttr(el, attr);
+                const { lead, core, trail } = splitWhitespace(original);
+                if (!core) return;
+                tasks.push({ type: "attr", el, attr, lead, trail, text: core });
+            });
+        });
+
+        if (!tasks.length) return;
+
+        const pendingTasks = [];
+        tasks.forEach(task => {
+            const cacheKey = `${targetLang}|${task.text}`;
+            const cached = uiTranslationCache.get(cacheKey);
+            if (cached) {
+                const safeCached = cached.trim().length ? cached : task.text;
+                applyTranslation(task, safeCached);
+            } else {
+                pendingTasks.push(task);
+            }
+        });
+
+        if (!pendingTasks.length) return;
+
+        try {
+            const response = await fetch(`${API_BASE}/translate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    text: pendingTasks.map(t => t.text),
+                    src_lang: "eng_Latn",
+                    tgt_lang: targetLang,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || `Server error ${response.status}`);
+            }
+
+            const data = await response.json();
+            const translations = data.translations || [];
+            pendingTasks.forEach((task, idx) => {
+                const translated = translations[idx] || task.text;
+                const safeTranslated = translated.trim().length ? translated : task.text;
+                const cacheKey = `${targetLang}|${task.text}`;
+                uiTranslationCache.set(cacheKey, safeTranslated);
+                applyTranslation(task, safeTranslated);
+            });
+        } catch (err) {
+            showToast(`❌ UI translation failed: ${err.message}`);
+        }
+    }
+
+    function initUiLanguage() {
+        if (!uiLangSelect) return;
+        uiLangSelect.innerHTML = UI_LANGUAGES.map(lang =>
+            `<option value="${lang.code}">${lang.label}</option>`
+        ).join("");
+
+        const savedLang = localStorage.getItem(UI_LANGUAGE_STORAGE_KEY) || "eng_Latn";
+        uiLangSelect.value = savedLang;
+        currentUiLang = savedLang;
+
+        uiLangSelect.addEventListener("change", () => {
+            translatePage(uiLangSelect.value, { force: true });
+        });
+
+        if (savedLang !== "eng_Latn") {
+            translatePage(savedLang, { force: true });
+        }
+    }
+
     // ---- DRAGGABLE FLOATING ELEMENTS ----
     document.querySelectorAll(".draggable").forEach(el => {
         let isDragging = false, startX, startY, elX, elY;
@@ -240,6 +497,10 @@ document.addEventListener("DOMContentLoaded", () => {
             if (pageName === "dictionary") renderDictionary();
             if (pageName === "categories") renderCategories();
             if (pageName === "translator") initTranslatorPage();
+
+            if (currentUiLang !== "eng_Latn") {
+                setTimeout(() => translatePage(currentUiLang, { force: true }), 80);
+            }
         }, 350);
 
         // Remove transition
@@ -373,7 +634,6 @@ document.addEventListener("DOMContentLoaded", () => {
             outputText.innerHTML = '<span class="output-placeholder">Translating…</span>';
 
             try {
-                const API_BASE = "http://localhost:8000";
                 const response = await fetch(`${API_BASE}/translate`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -499,6 +759,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 renderDictionary();
             });
         });
+
+        if (currentUiLang !== "eng_Latn") {
+            translatePage(currentUiLang, { force: true });
+        }
     }
 
     function createDictCard(item) {
@@ -554,6 +818,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 document.getElementById("category-detail").style.display = "none";
             });
         }
+
+        if (currentUiLang !== "eng_Latn") {
+            translatePage(currentUiLang, { force: true });
+        }
     }
 
     // ---- RECENT TRANSLATIONS ----
@@ -563,6 +831,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (recentTranslations.length === 0) {
             recentList.innerHTML = `<div class="empty-state"><span class="empty-icon">📋</span><p>No translations yet. Start translating above!</p></div>`;
+            if (currentUiLang !== "eng_Latn") {
+                translatePage(currentUiLang, { force: true });
+            }
             return;
         }
 
@@ -592,6 +863,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 showToast("Removed from history");
             });
         });
+
+        if (currentUiLang !== "eng_Latn") {
+            translatePage(currentUiLang, { force: true });
+        }
     }
 
     function escapeHTML(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
@@ -618,6 +893,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ---- INIT ----
     // Trigger home page animations
+    initUiLanguage();
     setTimeout(() => {
         triggerEnterAnimations(document.getElementById("page-home"));
         animateCounters();
